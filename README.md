@@ -24,7 +24,15 @@ See a [sample report](examples/sample-report.md).
 | SEC-01 | Medium | More than 5 active users with System Administrator |
 | ALM-01 | Info | Unmanaged solutions (fine in dev, a warning sign in test or production) |
 
-## How to run it
+## Two ways to run it
+
+### A. Inside Dynamics (no install)
+
+1. Upload `web/dvhealth.html` as an HTML web resource (for example `new_/tools/dvhealth.html`) and publish it.
+2. Open `https://yourorg.crm.dynamics.com/WebResources/new_/tools/dvhealth.html`.
+3. Press **Run scan**. It uses your current sign-in, so you see only what your security role allows.
+
+### B. From your computer (Python)
 
 ```bash
 pip install msal requests

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dataverse Health Check</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6470; --line:#e3e6ea;
+          --high:#c62828; --med:#e08600; --low:#2f6fd6; --info:#6b7280; --ok:#1e8e3e; --accent:#0f4c81; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI", system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--accent); color:#fff; padding:18px 28px; display:flex; align-items:center; justify-content:space-between; }
+  header h1 { margin:0; font-size:20px; font-weight:600; }
+  header .sub { font-size:13px; opacity:.85; margin-top:2px; }
+  button { background:#fff; color:var(--accent); border:0; border-radius:6px; padding:10px 22px; font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  main { max-width:1100px; margin:24px auto; padding:0 20px; display:grid; grid-template-columns:300px 1fr; gap:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
+  .score { text-align:center; }
+  .dial { width:180px; height:180px; margin:6px auto 10px; position:relative; }
+  .dial svg { transform:rotate(-90deg); }
+  .dial .num { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .dial .num b { font-size:46px; line-height:1; }
+  .dial .num span { font-size:13px; color:var(--muted); }
+  .counts { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:8px; }
+  .counts div { border-radius:6px; padding:6px 0; font-size:12px; color:#fff; }
+  .counts b { display:block; font-size:18px; }
+  .meta { font-size:12px; color:var(--muted); margin-top:14px; text-align:left; line-height:1.6; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  .checks { list-style:none; padding:0; margin:0; }
+  .checks li { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .checks li:last-child { border-bottom:0; }
+  .dot { width:18px; height:18px; border-radius:50%; flex:0 0 18px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#fff; background:#cfd4da; }
+  .dot.run { background:transparent; border:2px solid var(--accent); border-top-color:transparent; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .checks .res { margin-left:auto; font-size:12px; color:var(--muted); }
+  .finding { border-left:4px solid; border-radius:8px; background:var(--card); border-top:1px solid var(--line); border-right:1px solid var(--line); border-bottom:1px solid var(--line); padding:14px 16px; margin-bottom:12px; }
+  .finding .top { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .tag { font-size:11px; font-weight:700; color:#fff; border-radius:4px; padding:2px 7px; }
+  .finding h3 { margin:0; font-size:15px; }
+  .finding p { margin:6px 0; font-size:13px; color:var(--muted); white-space:pre-line; }
+  .finding .fix { color:var(--ink); }
+  .empty { color:var(--muted); font-size:14px; }
+  .right > .card + .card { margin-top:20px; }
+  footer { text-align:center; font-size:12px; color:var(--muted); margin:10px 0 30px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Dataverse Health Check</h1>
+    <div class="sub">Read-only scan · only GET requests · nothing is changed</div>
+  </div>
+  <button id="scan">Run scan</button>
+</header>
+
+<main>
+  <div class="card score">
+    <div class="dial">
+      <svg width="180" height="180" viewBox="0 0 180 180">
+        <circle cx="90" cy="90" r="78" fill="none" stroke="#e8ebef" stroke-width="14"/>
+        <circle id="arc" cx="90" cy="90" r="78" fill="none" stroke="#cfd4da" stroke-width="14"
+                stroke-linecap="round" stroke-dasharray="490" stroke-dashoffset="490"
+                style="transition:stroke-dashoffset 1.2s ease, stroke .4s"/>
+      </svg>
+      <div class="num"><b id="score">–</b><span>out of 100</span></div>
+    </div>
+    <div class="counts">
+      <div style="background:var(--high)"><b id="cH">0</b>High</div>
+      <div style="background:var(--med)"><b id="cM">0</b>Medium</div>
+      <div style="background:var(--low)"><b id="cL">0</b>Low</div>
+      <div style="background:var(--info)"><b id="cI">0</b>Info</div>
+    </div>
+    <div class="meta" id="meta">Press <b>Run scan</b> to check this environment.</div>
+  </div>
+
+  <div class="right">
+    <div class="card">
+      <h2>Checks</h2>
+      <ul class="checks" id="checks"></ul>
+    </div>
+    <div class="card">
+      <h2>Findings</h2>
+      <div id="findings"><div class="empty">No scan yet.</div></div>
+    </div>
+  </div>
+</main>
+<footer>Dataverse Health Check v0.1 · github.com/Krish8714/dataverse-health-check</footer>
+
+<script>
+(function () {
+  "use strict";
+  var API = "/api/data/v9.2/";
+  var H = { "Accept": "application/json", "OData-MaxVersion": "4.0", "OData-Version": "4.0",
+            "Prefer": 'odata.include-annotations="*"' };
+  var POINTS = { High: 15, Medium: 7, Low: 2, Info: 0 };
+  var COLOR = { High: "var(--high)", Medium: "var(--med)", Low: "var(--low)", Info: "var(--info)" };
+  var MS_TOKEN = "31bf3856ad364e35";
+  var MS_PUB = ["microsoft", "dynamics 365", "dynamics365", "adxstudio", "firstparty"];
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  async function get(q) {
+    var r = await fetch(API + q, { headers: H, credentials: "same-origin" });
+    var j = await r.json();
+    if (!r.ok) throw new Error((j.error && j.error.message) || ("HTTP " + r.status));
+    return j;
+  }
+  async function all(q) {
+    var j = await get(q), rows = j.value || [];
+    while (j["@odata.nextLink"]) {
+      var r = await fetch(j["@odata.nextLink"], { headers: H, credentials: "same-origin" });
+      j = await r.json(); rows = rows.concat(j.value || []);
+    }
+    return rows;
+  }
+
+  // ---- what is "yours"
+  var scope = { prefixes: [], assemblies: [] };
+  async function buildScope() {
+    var pubs = await all("publishers?$select=uniquename,friendlyname,customizationprefix");
+    var set = {};
+    pubs.forEach(function (p) {
+      var name = (p.uniquename + " " + p.friendlyname).toLowerCase();
+      if (p.customizationprefix && !MS_PUB.some(function (m) { return name.indexOf(m) >= 0; })) set[p.customizationprefix.toLowerCase()] = 1;
+    });
+    scope.prefixes = Object.keys(set).sort();
+    var asm = await all("pluginassemblies?$select=pluginassemblyid,name,isolationmode,publickeytoken&$filter=customizationlevel eq 1");
+    scope.assemblies = asm.filter(function (a) { return (a.publickeytoken || "").toLowerCase() !== MS_TOKEN; });
+  }
+  function mine(n) { n = (n || "").toLowerCase(); return scope.prefixes.some(function (p) { return n.indexOf(p + "_") === 0; }); }
+  async function yourSteps(filter) {
+    var steps = [];
+    for (var i = 0; i < scope.assemblies.length; i++) {
+      var types = await all("plugintypes?$select=plugintypeid&$filter=_pluginassemblyid_value eq " + scope.assemblies[i].pluginassemblyid);
+      for (var k = 0; k < types.length; k++) {
+        steps = steps.concat(await all("sdkmessageprocessingsteps?$select=name,filteringattributes,mode,statecode&$filter=_plugintypeid_value eq "
+          + types[k].plugintypeid + " and " + filter + "&$expand=sdkmessageid($select=name),sdkmessagefilterid($select=primaryobjecttypecode)"));
+      }
+    }
+    return steps;
+  }
+
+  // ---- checks: each returns an array of findings
+  var org = null;
+  var CHECKS = [
+    { name: "Sync plug-ins without filtering attributes", run: async function () {
+        var bad = (await yourSteps("mode eq 0 and statecode eq 0")).filter(function (s) {
+          return s.sdkmessageid && s.sdkmessageid.name === "Update" && !s.filteringattributes; });
+        return bad.length ? [{ id: "PLUGIN-01", sev: "High", title: bad.length + " sync Update step(s) run on every save",
+          detail: bad.map(function (s) { return "• " + s.name; }).join("\n"),
+          fix: "Set filtering attributes to only the columns the plug-in needs." }] : []; } },
+    { name: "Disabled plug-in steps", run: async function () {
+        var s = await yourSteps("statecode eq 1");
+        return s.length ? [{ id: "PLUGIN-02", sev: "Low", title: s.length + " plug-in step(s) left disabled",
+          detail: s.map(function (x) { return "• " + x.name; }).join("\n"), fix: "Remove steps you no longer need." }] : []; } },
+    { name: "Plug-ins outside the sandbox", run: async function () {
+        var bad = scope.assemblies.filter(function (a) { return a.isolationmode !== 2; });
+        return bad.length ? [{ id: "PLUGIN-03", sev: "High", title: bad.length + " assembly(ies) not in the sandbox",
+          detail: bad.map(function (a) { return "• " + a.name; }).join("\n"), fix: "Register custom assemblies in sandbox mode." }] : []; } },
+    { name: "Plug-in errors in the trace log", run: async function () {
+        var d = await get("plugintracelogs?$select=typename&$filter=exceptiondetails ne null&$count=true&$top=10");
+        var c = d["@odata.count"] || 0;
+        return c ? [{ id: "PLUGIN-04", sev: "Medium", title: c + " plug-in trace log(s) with exceptions",
+          detail: "", fix: "Group the trace log by type name and fix the noisiest plug-in first." }] : []; } },
+    { name: "Environment auditing", run: async function () {
+        org = (await get("organizations?$select=isauditenabled,plugintracelogsetting")).value[0];
+        var out = [];
+        if (!org.isauditenabled) out.push({ id: "AUDIT-01", sev: "High", title: "Auditing is turned off for the whole environment",
+          detail: "No changes are being recorded, so nobody can see who changed what.",
+          fix: "Turn on auditing in the Power Platform admin center, then on the tables that matter." });
+        if (org.plugintracelogsetting === 2) out.push({ id: "TRACE-01", sev: "Medium", title: "Plug-in trace log is set to 'All'",
+          detail: "Every plug-in run writes a trace row.", fix: "Use 'Exception' in production." });
+        return out; } },
+    { name: "Auditing on your tables", run: async function () {
+        if (!org || !org.isauditenabled) return [];
+        var e = await all("EntityDefinitions?$select=LogicalName,IsAuditEnabled&$filter=IsCustomEntity eq true");
+        var off = e.filter(function (x) { return mine(x.LogicalName) && !(x.IsAuditEnabled && x.IsAuditEnabled.Value); });
+        return off.length ? [{ id: "AUDIT-02", sev: "Low", title: off.length + " of your tables have auditing off",
+          detail: off.map(function (x) { return "• " + x.LogicalName; }).join("\n"), fix: "Audit tables that hold business or personal data." }] : []; } },
+    { name: "Failed system jobs (7 days)", run: async function () {
+        var since = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19) + "Z";
+        var d = await get("asyncoperations?$select=name&$filter=statuscode eq 31 and createdon ge " + since
+          + " and not startswith(name,'Microsoft')&$count=true&$top=20");
+        var c = d["@odata.count"] || 0;
+        if (!c) return [];
+        var names = {}; d.value.forEach(function (v) { names[v.name || "?"] = 1; });
+        return [{ id: "JOBS-01", sev: c > 100 ? "High" : (c > 20 ? "Medium" : "Low"), title: c + " system job(s) failed in the last 7 days",
+          detail: Object.keys(names).map(function (n) { return "• " + n; }).join("\n"),
+          fix: "Open System Jobs, filter on Failed, and fix the most common error first." }]; } },
+    { name: "Real-time workflows", run: async function () {
+        var w = (await all("workflows?$select=name,primaryentity,ismanaged&$filter=category eq 0 and mode eq 1 and type eq 1 and statecode eq 1"))
+          .filter(function (x) { return mine(x.primaryentity) || !x.ismanaged; });
+        return w.length ? [{ id: "LOGIC-01", sev: "Medium", title: w.length + " active real-time workflow(s)",
+          detail: w.map(function (x) { return "• " + x.name; }).join("\n"), fix: "Move them to plug-ins or Power Automate." }] : []; } },
+    { name: "System Administrator count", run: async function () {
+        var r = await all("roles?$select=name&$filter=name eq 'System Administrator'&$expand=systemuserroles_association($select=fullname,isdisabled,accessmode)");
+        var u = {}; r.forEach(function (x) { x.systemuserroles_association.forEach(function (y) { if (!y.isdisabled && y.accessmode === 0) u[y.fullname] = 1; }); });
+        var n = Object.keys(u).length;
+        return n > 5 ? [{ id: "SEC-01", sev: "Medium", title: n + " active users are System Administrators",
+          detail: "", fix: "Keep System Administrator for a small admin group." }] : []; } },
+    { name: "Unmanaged solutions", run: async function () {
+        var s = (await all("solutions?$select=uniquename&$filter=isvisible eq true and ismanaged eq false"))
+          .map(function (x) { return x.uniquename; }).filter(function (n) { return ["Default", "Active", "Basic"].indexOf(n) < 0; });
+        return s.length ? [{ id: "ALM-01", sev: "Info", title: s.length + " unmanaged solution(s)",
+          detail: s.map(function (n) { return "• " + n; }).join("\n") + "\nNormal in development; a warning sign in test or production.",
+          fix: "Use managed solutions from a pipeline in test and production." }] : []; } }
+  ];
+
+  var list = document.getElementById("checks");
+  function drawChecks() {
+    list.innerHTML = CHECKS.map(function (c, i) {
+      return '<li id="c' + i + '"><span class="dot"></span>' + esc(c.name) + '<span class="res"></span></li>'; }).join("");
+  }
+  function setScore(score, counts) {
+    var arc = document.getElementById("arc");
+    arc.style.strokeDashoffset = String(490 - 490 * score / 100);
+    arc.style.stroke = score >= 85 ? "var(--ok)" : score >= 60 ? "var(--med)" : "var(--high)";
+    document.getElementById("score").textContent = score;
+    ["H", "M", "L", "I"].forEach(function (k) { document.getElementById("c" + k).textContent = counts[k]; });
+  }
+  function drawFindings(f) {
+    var order = ["High", "Medium", "Low", "Info"];
+    f.sort(function (a, b) { return order.indexOf(a.sev) - order.indexOf(b.sev); });
+    document.getElementById("findings").innerHTML = f.length ? f.map(function (x) {
+      return '<div class="finding" style="border-left-color:' + COLOR[x.sev] + '"><div class="top"><span class="tag" style="background:'
+        + COLOR[x.sev] + '">' + x.sev.toUpperCase() + '</span><h3>' + esc(x.id + ": " + x.title) + '</h3></div>'
+        + (x.detail ? '<p>' + esc(x.detail) + '</p>' : '') + '<p class="fix"><b>How to fix:</b> ' + esc(x.fix) + '</p></div>';
+    }).join("") : '<div class="empty">No issues found. Nice work!</div>';
+  }
+
+  async function scan() {
+    var btn = document.getElementById("scan");
+    btn.disabled = true; btn.textContent = "Scanning…";
+    drawChecks(); drawFindings([]); document.getElementById("findings").innerHTML = '<div class="empty">Scanning…</div>';
+    setScore(0, { H: 0, M: 0, L: 0, I: 0 }); document.getElementById("score").textContent = "…";
+    var findings = [];
+    try { await buildScope(); } catch (e) { document.getElementById("meta").textContent = "Could not read this environment: " + e.message; btn.disabled = false; btn.textContent = "Run scan"; return; }
+    for (var i = 0; i < CHECKS.length; i++) {
+      var li = document.getElementById("c" + i), dot = li.querySelector(".dot"), res = li.querySelector(".res");
+      dot.className = "dot run";
+      await sleep(250); // keeps the progress readable
+      try {
+        var f = await CHECKS[i].run();
+        findings = findings.concat(f);
+        if (!f.length) { dot.className = "dot"; dot.style.background = "var(--ok)"; dot.textContent = "✓"; res.textContent = "OK"; }
+        else { dot.className = "dot"; dot.style.background = COLOR[f[0].sev]; dot.textContent = "!"; res.textContent = f.map(function (x) { return x.sev; }).join(", "); }
+      } catch (e) { dot.className = "dot"; dot.style.background = "#9aa1a9"; dot.textContent = "?"; res.textContent = "could not run"; }
+    }
+    var score = Math.max(0, 100 - findings.reduce(function (s, x) { return s + POINTS[x.sev]; }, 0));
+    var counts = { H: 0, M: 0, L: 0, I: 0 };
+    findings.forEach(function (x) { counts[x.sev[0]]++; });
+    setScore(score, counts);
+    drawFindings(findings);
+    document.getElementById("meta").innerHTML = "<b>Environment:</b> " + esc(location.host) + "<br><b>Your prefixes:</b> "
+      + esc(scope.prefixes.join(", ") || "none") + "<br><b>Your plug-in assemblies:</b> " + scope.assemblies.length
+      + "<br><b>Scanned:</b> " + new Date().toLocaleString();
+    btn.disabled = false; btn.textContent = "Run again";
+  }
+
+  drawChecks();
+  document.getElementById("scan").addEventListener("click", scan);
+})();
+</script>
+</body>
+</html>
